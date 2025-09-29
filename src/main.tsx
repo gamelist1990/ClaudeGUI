@@ -7,3 +7,8 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <App />
   </React.StrictMode>,
 );
+
+if (import.meta.hot) {
+  import.meta.hot.accept();
+}
+

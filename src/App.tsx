@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/tauri";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import "./App.css";
+import { Composer, MarkdownView, Message } from "./components";
 
 type Message = {
   id: string;
@@ -9,18 +9,17 @@ type Message = {
   text: string;
 };
 
+
 export default function App() {
   const [tab, setTab] = useState<"conversation" | "history" | "settings">("conversation");
-  const [running, setRunning] = useState(false);
+  const [, setRunning] = useState(false); // Start/Stopボタンで使用
   const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState("");
   const [envBaseUrl, setEnvBaseUrl] = useState<string>(
     localStorage.getItem("ANTHROPIC_BASE_URL") ?? ""
   );
   const messagesRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    const mounted = true;
     let unlistenOut: UnlistenFn | null = null;
     let unlistenErr: UnlistenFn | null = null;
 
@@ -33,9 +32,6 @@ export default function App() {
         const payload = (e.payload as any) ?? "";
         appendMessage({ id: String(Date.now()) + "-e", source: "stderr", text: String(payload) });
       });
-
-      const statusRes = await invoke("status");
-      setRunning(Boolean(statusRes));
     })();
 
     return () => {
@@ -55,34 +51,12 @@ export default function App() {
     setMessages((s) => [...s, m]);
   }
 
-  async function startClaude() {
-    try {
-      const envs = envBaseUrl ? { ANTHROPIC_BASE_URL: envBaseUrl } : undefined;
-      await invoke("start_claude", { args: [], envs });
-      setRunning(true);
-      appendMessage({ id: String(Date.now()), source: "claude", text: "(claude started)" });
-    } catch (e: any) {
-      appendMessage({ id: String(Date.now()), source: "stderr", text: String(e) });
-    }
-  }
-
-  async function stopClaude() {
-    try {
-      await invoke("stop_claude");
-      setRunning(false);
-      appendMessage({ id: String(Date.now()), source: "claude", text: "(claude stopped)" });
-    } catch (e: any) {
-      appendMessage({ id: String(Date.now()), source: "stderr", text: String(e) });
-    }
-  }
-
-  async function sendInput() {
-    if (!input.trim()) return;
-    const text = input;
+  async function handleSend(text: string) {
+    if (!text.trim()) return;
     appendMessage({ id: String(Date.now()), source: "user", text });
-    setInput("");
     try {
-      await invoke("send_input", { text });
+      const { sendInput } = await import("./services/claude");
+      await sendInput(text);
     } catch (e: any) {
       appendMessage({ id: String(Date.now()), source: "stderr", text: String(e) });
     }
@@ -139,11 +113,7 @@ export default function App() {
         <div className="title">Claude GUI</div>
         <div className="controls">
           <button onClick={() => { document.documentElement.classList.toggle('dark'); }}>Toggle Theme</button>
-          {running ? (
-            <button onClick={stopClaude}>Stop</button>
-          ) : (
-            <button onClick={startClaude}>Start</button>
-          )}
+          <button onClick={async () => { const svc = await import('./services/claude'); const running = await svc.status(); setRunning(Boolean(running)); if (running) { svc.stopClaude(); appendMessage({ id: String(Date.now()), source: 'claude', text: '(claude stopped)' }); } else { svc.startClaude([], envBaseUrl ? { ANTHROPIC_BASE_URL: envBaseUrl } : undefined); appendMessage({ id: String(Date.now()), source: 'claude', text: '(claude started)' }); } }}>Start/Stop</button>
         </div>
       </header>
 
@@ -160,17 +130,15 @@ export default function App() {
               {messages.map((m) => (
                 <div key={m.id} className={`message ${m.source}`}>
                   <div className="meta">{m.source}</div>
-                  <div className="text">{m.text}</div>
+                  <div className="text"><MarkdownView source={m.text} /></div>
                 </div>
               ))}
             </div>
 
-            <div className="composer">
-              <textarea value={input} onChange={(e) => setInput(e.currentTarget.value)} placeholder="Type your message..." />
-              <div className="composer-actions">
-                <button onClick={sendInput}>Send</button>
-                <button onClick={saveConversation}>Save</button>
-              </div>
+            <Composer onSend={handleSend} />
+            <div style={{display:'flex', gap:8}}>
+              <button onClick={saveConversation}>Save</button>
+              <button onClick={exportConversations}>Export</button>
             </div>
           </section>
         )}
@@ -187,7 +155,7 @@ export default function App() {
                   <div>Conversation {c.id}</div>
                   <div className="history-preview">
                     {c.messages.slice(-5).map((m: any, idx: number) => (
-                      <div key={idx} className={`preview ${m.source}`}>{m.source}: {m.text}</div>
+                      <div key={idx} className={`preview ${m.source}`}><MarkdownView source={m.text} /></div>
                     ))}
                   </div>
                 </div>
