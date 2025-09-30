@@ -7,6 +7,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use once_cell::sync::Lazy;
+use tracing::{debug, error};
+mod process_launcher;
 
 // Simple global storage for the spawned claude process.
 static CLAUDE_CHILD: Lazy<Mutex<Option<Arc<Mutex<Child>>>>> = Lazy::new(|| Mutex::new(None));
@@ -21,13 +23,26 @@ fn greet(name: &str) -> String {
 }
 
 #[tauri::command]
-fn start_claude(args: Option<Vec<String>>, envs: Option<HashMap<String, String>>) -> Result<String, String> {
+fn start_claude(
+    args: Option<Vec<String>>,
+    envs: Option<HashMap<String, String>>,
+    working_dir: Option<String>,
+    executable: Option<String>,
+) -> Result<String, String> {
     let mut guard = CLAUDE_CHILD.lock().map_err(|e| e.to_string())?;
     if guard.is_some() {
+        error!("attempt to start claude while one is already running");
         return Err("claude already running".into());
     }
 
-    let mut cmd = Command::new("claude");
+        // Use provided executable path if supplied, otherwise default to "claude"
+        let mut cmd = if let Some(exe) = executable.clone() {
+            debug!(%exe, "using provided executable to start claude");
+            Command::new(exe)
+        } else {
+            debug!("using default 'claude' executable from PATH");
+            Command::new("claude")
+        };
     let args_vec = args.unwrap_or_default();
     if !args_vec.is_empty() {
         cmd.args(&args_vec);
@@ -35,15 +50,44 @@ fn start_claude(args: Option<Vec<String>>, envs: Option<HashMap<String, String>>
     // Note: do NOT forcefully add --dangerously-skip-permissions here.
     // The frontend can opt-in by passing that arg when starting a session.
 
-    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
 
-    if let Some(envmap) = envs {
+    // Clone refs for envs and working_dir so we don't move the original
+    // Option values. We'll apply environment variables and working dir
+    // from these clones and also reuse them for shell fallback if needed.
+    let envs_clone = envs.as_ref().map(|m| m.clone());
+    if let Some(envmap) = envs_clone.as_ref() {
         for (k, v) in envmap {
             cmd.env(k, v);
         }
     }
 
-    let mut child = cmd.spawn().map_err(|e| format!("failed to spawn claude: {}", e))?;
+    let working_dir_clone = working_dir.clone();
+    if let Some(dir) = working_dir_clone.as_ref() {
+        debug!(%dir, "setting working directory for claude");
+        cmd.current_dir(dir);
+    }
+
+    // Prepare clones of args to avoid ownership issues when attempting
+    // fallbacks below.
+    let args_vec = args_vec.clone();
+
+    // Use the process_launcher module to spawn the process (handles shell fallback)
+    let prog = executable.clone().unwrap_or_else(|| "claude".to_string());
+    let mut child = match process_launcher::spawn_process(
+        &prog,
+        &args_vec,
+        envs_clone.as_ref(),
+        working_dir_clone.as_deref(),
+    ) {
+        Ok(c) => c,
+        Err(e) => {
+            error!(%e, "failed to spawn claude (launcher)");
+            return Err(format!("failed to spawn claude: {}", e));
+        }
+    };
 
     // Take stdout/stderr and spawn threads to capture lines into buffers.
     let stdout = child.stdout.take();
@@ -58,7 +102,9 @@ fn start_claude(args: Option<Vec<String>>, envs: Option<HashMap<String, String>>
             for line in reader.lines() {
                 match line {
                     Ok(l) => {
-                        let _ = CLAUDE_STDOUT.lock().map(|mut v| v.push(l));
+                        // push to buffer
+                        let _ = CLAUDE_STDOUT.lock().map(|mut v| v.push(l.clone()));
+                        debug!(stdout = %l, "claude stdout");
                     }
                     Err(_) => break,
                 }
@@ -72,7 +118,8 @@ fn start_claude(args: Option<Vec<String>>, envs: Option<HashMap<String, String>>
             for line in reader.lines() {
                 match line {
                     Ok(l) => {
-                        let _ = CLAUDE_STDERR.lock().map(|mut v| v.push(l));
+                        let _ = CLAUDE_STDERR.lock().map(|mut v| v.push(l.clone()));
+                        error!(stderr = %l, "claude stderr");
                     }
                     Err(_) => break,
                 }
@@ -81,10 +128,7 @@ fn start_claude(args: Option<Vec<String>>, envs: Option<HashMap<String, String>>
     }
 
     // Return pid if available
-    let pid = child_arc
-        .lock()
-        .map_err(|e| e.to_string())?
-        .id();
+    let pid = child_arc.lock().map_err(|e| e.to_string())?.id();
 
     Ok(format!("started pid {}", pid))
 }
@@ -111,9 +155,7 @@ fn send_input(text: String) -> Result<(), String> {
             stdin
                 .write_all(text.as_bytes())
                 .map_err(|e| e.to_string())?;
-            stdin
-                .write_all(b"\n")
-                .map_err(|e| e.to_string())?;
+            stdin.write_all(b"\n").map_err(|e| e.to_string())?;
             stdin.flush().map_err(|e| e.to_string())?;
             return Ok(());
         }
@@ -152,7 +194,14 @@ fn status() -> bool {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Initialize tracing subscriber for debug logs
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_target(false)
+        .try_init();
+
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             greet,

@@ -21,6 +21,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
 }) => {
   const [localBaseUrl, setLocalBaseUrl] = useState(baseUrl);
   const [localYolo, setLocalYolo] = useState(yoloEnabled);
+  const [localExecutable, setLocalExecutable] = useState<string>(() => {
+    return localStorage.getItem('claude_executable') ?? '';
+  });
 
   useEffect(() => {
     setLocalBaseUrl(baseUrl);
@@ -30,6 +33,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   const handleSave = () => {
     onSave(localBaseUrl);
     onToggleYolo(localYolo);
+    localStorage.setItem('claude_executable', localExecutable);
     onClose();
   };
 
@@ -97,6 +101,34 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                   color: 'var(--color-text-muted)'
                 }}>
                   Leave empty to use the default Anthropic API endpoint
+                </p>
+              </div>
+
+              <div style={{ marginBottom: 'var(--space-4)' }}>
+                <label style={{
+                  display: 'block',
+                  fontSize: 'var(--text-sm)',
+                  fontWeight: 'var(--font-weight-medium)',
+                  color: 'var(--color-text-secondary)',
+                  marginBottom: 'var(--space-2)'
+                }}>
+                  Claude Executable Path
+                </label>
+                <input
+                  type="text"
+                  className="input"
+                  value={localExecutable}
+                  onChange={(e) => setLocalExecutable(e.target.value)}
+                  placeholder="/usr/local/bin/claude or C:\\path\\to\\claude.exe"
+                />
+                <p style={{
+                  margin: 'var(--space-2) 0 0',
+                  fontSize: 'var(--text-xs)',
+                  color: 'var(--color-text-muted)'
+                }}>
+                  空欄にするとシステムの PATH にある 'claude' コマンドを使います（グローバルにインストールされている場合は通常これで動作します）。
+                  アプリはワークスペース選択時にそのフォルダへ移動（cd）してから Claude を起動します。
+                  PATH にない環境や明示的に指定したい場合はフルパス（例: C:\\path\\to\\claude.exe）を入力してください。
                 </p>
               </div>
             </div>

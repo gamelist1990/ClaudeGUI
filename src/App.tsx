@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { UnlistenFn } from "@tauri-apps/api/event";
+import WorkspaceSelect from './components/layout/WorkspaceSelect';
 import "./styles/theme.css";
 import "./styles/components.css";
 import { ThemeProvider } from "./contexts/ThemeContext";
@@ -16,6 +17,9 @@ const AppContent: React.FC = () => {
     localStorage.getItem("ANTHROPIC_BASE_URL") ?? ""
   );
   const [thinkMode, setThinkMode] = useState(false);
+  const [currentWorkspace, setCurrentWorkspace] = useState<string | null>(() => {
+    return localStorage.getItem('currentWorkspace');
+  });
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
 
@@ -27,25 +31,17 @@ const AppContent: React.FC = () => {
   );
 
 
-  // Event listeners setup
+  // Listen to claude stdout/stderr events and append messages
   useEffect(() => {
     let unlistenOut: UnlistenFn | null = null;
     let unlistenErr: UnlistenFn | null = null;
 
     (async () => {
       unlistenOut = await ClaudeAPI.onStdout((payload) => {
-        appendMessage({ 
-          id: String(Date.now()) + "-o", 
-          source: "claude", 
-          text: payload 
-        });
+        appendMessage({ id: String(Date.now()) + "-o", source: "claude", text: payload });
       });
       unlistenErr = await ClaudeAPI.onStderr((payload) => {
-        appendMessage({ 
-          id: String(Date.now()) + "-e", 
-          source: "stderr", 
-          text: payload 
-        });
+        appendMessage({ id: String(Date.now()) + "-e", source: "stderr", text: payload });
       });
     })();
 
@@ -54,6 +50,41 @@ const AppContent: React.FC = () => {
       if (unlistenErr) unlistenErr();
     };
   }, []);
+
+  // Workspace opened listener: when user opens workspace, auto-start claude in that dir
+  useEffect(() => {
+    function onWorkspace(e: any) {
+      const path = e.detail as string;
+      setCurrentWorkspace(path);
+      localStorage.setItem('currentWorkspace', path);
+      (async () => {
+        try {
+          const svc = await import('./services/claude');
+          const args: string[] = [];
+          if (mode === 'yolo' || mode === 'bypass') args.push('--dangerously-skip-permissions');
+          const exe = localStorage.getItem('claude_executable') ?? undefined;
+          await svc.startClaude(args, envBaseUrl ? { ANTHROPIC_BASE_URL: envBaseUrl } : undefined, path, exe);
+          appendMessage({ id: String(Date.now()), source: 'claude', text: `(started claude in ${path})` });
+          setIsRunning(true);
+        } catch (e: any) {
+          appendMessage({ id: String(Date.now()), source: 'stderr', text: String(e) });
+        }
+      })();
+    }
+
+    window.addEventListener('workspace-opened', onWorkspace as EventListener);
+    return () => window.removeEventListener('workspace-opened', onWorkspace as EventListener);
+  }, [mode, envBaseUrl]);
+
+  // If no workspace is configured, we'll show a workspace selection screen.
+  const openWorkspacePicker = async () => {
+  const { open } = await import('@tauri-apps/plugin-dialog');
+    const selected = await open({ directory: true, multiple: false }) as string | string[] | null;
+    if (!selected) return;
+    const path = Array.isArray(selected) ? selected[0] : selected;
+    // reuse the same handler as window event
+    window.dispatchEvent(new CustomEvent('workspace-opened', { detail: path }));
+  };
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -157,9 +188,12 @@ const AppContent: React.FC = () => {
         args.push('--dangerously-skip-permissions');
       }
       
+      const exe = localStorage.getItem('claude_executable') ?? undefined;
       await svc.startClaude(
-        args, 
-        envBaseUrl ? { ANTHROPIC_BASE_URL: envBaseUrl } : undefined
+        args,
+        envBaseUrl ? { ANTHROPIC_BASE_URL: envBaseUrl } : undefined,
+        currentWorkspace ?? undefined,
+        exe
       );
       appendMessage({ 
         id: String(Date.now()), 
@@ -234,9 +268,12 @@ const AppContent: React.FC = () => {
           args.push('--dangerously-skip-permissions');
         }
         
+        const exe = localStorage.getItem('claude_executable') ?? undefined;
         await svc.startClaude(
           args, 
-          envBaseUrl ? { ANTHROPIC_BASE_URL: envBaseUrl } : undefined
+          envBaseUrl ? { ANTHROPIC_BASE_URL: envBaseUrl } : undefined,
+          currentWorkspace ?? undefined,
+          exe
         );
         appendMessage({ 
           id: String(Date.now()), 
@@ -252,6 +289,14 @@ const AppContent: React.FC = () => {
         text: String(e)
       });
     }
+  }
+
+  if (!currentWorkspace) {
+    return (
+      <ThemeProvider>
+        <WorkspaceSelect onSelect={(p) => window.dispatchEvent(new CustomEvent('workspace-opened', { detail: p }))} onOpenPicker={openWorkspacePicker} recent={JSON.parse(localStorage.getItem('workspaces') ?? '[]')} />
+      </ThemeProvider>
+    );
   }
 
   return (
@@ -281,6 +326,7 @@ const AppContent: React.FC = () => {
         thinkMode={thinkMode}
         onSaveConversation={saveConversation}
         onExportConversations={exportConversations}
+        // disable chat input if workspace not set (should not happen because we render WorkspaceSelect)
       />
       
       <SettingsModal

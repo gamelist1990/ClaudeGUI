@@ -17,6 +17,7 @@ interface ChatContainerProps {
   thinkMode: boolean;
   onSaveConversation: () => void;
   onExportConversations: () => void;
+  disabled?: boolean;
 }
 
 const ChatContainer: React.FC<ChatContainerProps> = ({
@@ -26,6 +27,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   thinkMode,
   onSaveConversation,
   onExportConversations,
+  disabled,
 }) => {
   return (
     <main className="main-content">
@@ -64,6 +66,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
               onSend={onSendMessage}
               mode={mode}
               thinkMode={thinkMode}
+              disabled={disabled}
             />
           </div>
           

@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { open } from '@tauri-apps/plugin-dialog';
 import Badge from '../ui/Badge';
 import Button from '../ui/Button';
 
@@ -26,6 +27,32 @@ const Sidebar: React.FC<SidebarProps> = ({
   onStartStop,
   isRunning,
 }) => {
+  const [workspaces, setWorkspaces] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('workspaces') ?? '[]');
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem('workspaces', JSON.stringify(workspaces));
+  }, [workspaces]);
+
+  async function addWorkspace() {
+    const selected = await open({ directory: true, multiple: false }) as string | string[] | null;
+    if (!selected) return;
+    const path = Array.isArray(selected) ? selected[0] : selected;
+    setWorkspaces((s) => [path, ...s.filter(p => p !== path)].slice(0, 10));
+  }
+
+  async function openWorkspace(path: string) {
+    // Set as most recent
+    setWorkspaces((s) => [path, ...s.filter(p => p !== path)].slice(0, 10));
+    // Notify user by appending a message via custom event on window
+    window.dispatchEvent(new CustomEvent('workspace-opened', { detail: path }));
+  }
+
   return (
     <aside className="sidebar">
       <div className="sidebar-header">
@@ -45,6 +72,23 @@ const Sidebar: React.FC<SidebarProps> = ({
       </div>
       
       <div className="sidebar-content">
+        <div style={{ marginBottom: 'var(--space-4)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-2)' }}>
+            <strong style={{ fontSize: 'var(--text-sm)' }}>Workspaces</strong>
+            <Button variant="primary" size="sm" onClick={addWorkspace}>Add</Button>
+          </div>
+          {workspaces.length === 0 ? (
+            <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-xs)' }}>No workspaces</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
+              {workspaces.map((w) => (
+                <div key={w} className="card" style={{ padding: 'var(--space-2)', cursor: 'pointer' }} onClick={() => openWorkspace(w)}>
+                  <div style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-weight-medium)' }}>{w}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
         {conversations.length > 0 ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
             {conversations.map((conv) => (

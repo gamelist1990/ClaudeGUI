@@ -1,8 +1,8 @@
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 
-export async function startClaude(args?: string[], envs?: Record<string, string>) {
-  return invoke("start_claude", { args: args ?? [], envs });
+export async function startClaude(args?: string[], envs?: Record<string, string>, working_dir?: string, executable?: string) {
+  return invoke("start_claude", { args: args ?? [], envs, working_dir, executable });
 }
 
 export async function stopClaude() {
