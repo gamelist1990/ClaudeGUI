@@ -108,6 +108,78 @@ const AppContent: React.FC = () => {
     setMessages((s) => [...s, m]);
   }
 
+  // Poll claude stdout/stderr buffers and parse lines for mode/thinking/todos
+  useEffect(() => {
+    let cancelled = false;
+    let lastOutCount = 0;
+    let lastErrCount = 0;
+
+    async function poll() {
+      try {
+        const svc = await import('./services/claude');
+        const res: any = await svc.getOutput();
+        const out: string[] = res[0] ?? [];
+        const err: string[] = res[1] ?? [];
+
+        // New stdout lines
+        if (out.length > lastOutCount) {
+          const newLines = out.slice(lastOutCount);
+          for (const line of newLines) {
+            appendMessage({ id: String(Date.now()) + '-o', source: 'claude', text: line });
+
+            // Detect mode line like: '⏵⏵ bypass permissions on (alt+m to cycle)'
+            const modeMatch = line.match(/⏵⏵\s*([a-zA-Z\s]+)\s+on/i);
+            if (modeMatch) {
+              const textMode = modeMatch[1].toLowerCase();
+              if (textMode.includes('bypass')) setMode('bypass');
+              else if (textMode.includes('yolo')) setMode('yolo');
+              else setMode('normal');
+            }
+
+            // Detect thinking indicator
+            if (/Thinking\s+on/i.test(line)) {
+              setThinkMode(true);
+            } else if (/Thinking\s+off/i.test(line)) {
+              setThinkMode(false);
+            }
+
+            // Try to parse JSON tool outputs (stream-json output)
+            if (line.trim().startsWith('{') || line.trim().startsWith('[')) {
+              try {
+                const obj = JSON.parse(line);
+                appendMessage({ id: String(Date.now()) + '-tool', source: 'claude', text: JSON.stringify(obj) });
+              } catch (e) {
+                // ignore non-JSON lines
+              }
+            }
+          }
+          lastOutCount = out.length;
+        }
+
+        // New stderr lines
+        if (err.length > lastErrCount) {
+          const newLines = err.slice(lastErrCount);
+          for (const line of newLines) {
+            appendMessage({ id: String(Date.now()) + '-e', source: 'stderr', text: line });
+          }
+          lastErrCount = err.length;
+        }
+      } catch (e) {
+        // ignore poll errors briefly
+      }
+    }
+
+    const iv = setInterval(() => {
+      if (cancelled) return;
+      poll();
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      clearInterval(iv);
+    };
+  }, []);
+
   async function handleSendMessage(text: string) {
     if (!text.trim()) return;
     

@@ -1,3 +1,5 @@
+// ...existing code from src/process_launcher.rs moved here
+
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::process::{Child, Command, Stdio};
