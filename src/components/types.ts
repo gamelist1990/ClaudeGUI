@@ -1,5 +1,2 @@
-export default interface MessageType {
-  id: string;
-  source: 'user' | 'claude' | 'stderr';
-  text: string;
-}
+// Re-export MessageType from API for backward compatibility
+export type { MessageType as default } from '../api';

@@ -1,18 +1,14 @@
 import React, { useEffect, useRef, useState } from "react";
-import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import { UnlistenFn } from "@tauri-apps/api/event";
 import "./App.css";
 import { Composer, MarkdownView, Message } from "./components";
+import { ClaudeAPI, MessageType } from "./api";
 
-type Message = {
-  id: string;
-  source: "user" | "claude" | "stderr";
-  text: string;
-};
+type Message = MessageType;
 
 
 export default function App() {
   const [tab, setTab] = useState<"conversation" | "history" | "settings">("conversation");
-  const [, setRunning] = useState(false); // Start/Stopボタンで使用
   const [messages, setMessages] = useState<Message[]>([]);
   const [envBaseUrl, setEnvBaseUrl] = useState<string>(
     localStorage.getItem("ANTHROPIC_BASE_URL") ?? ""
@@ -24,13 +20,11 @@ export default function App() {
     let unlistenErr: UnlistenFn | null = null;
 
     (async () => {
-      unlistenOut = await listen("claude-stdout", (e) => {
-        const payload = (e.payload as any) ?? "";
-        appendMessage({ id: String(Date.now()) + "-o", source: "claude", text: String(payload) });
+      unlistenOut = await ClaudeAPI.onStdout((payload) => {
+        appendMessage({ id: String(Date.now()) + "-o", source: "claude", text: payload });
       });
-      unlistenErr = await listen("claude-stderr", (e) => {
-        const payload = (e.payload as any) ?? "";
-        appendMessage({ id: String(Date.now()) + "-e", source: "stderr", text: String(payload) });
+      unlistenErr = await ClaudeAPI.onStderr((payload) => {
+        appendMessage({ id: String(Date.now()) + "-e", source: "stderr", text: payload });
       });
     })();
 
@@ -55,8 +49,7 @@ export default function App() {
     if (!text.trim()) return;
     appendMessage({ id: String(Date.now()), source: "user", text });
     try {
-      const { sendInput } = await import("./services/claude");
-      await sendInput(text);
+      await ClaudeAPI.sendInput({ text });
     } catch (e: any) {
       appendMessage({ id: String(Date.now()), source: "stderr", text: String(e) });
     }
@@ -108,16 +101,8 @@ export default function App() {
   }
 
   return (
-    <div className="app-root">
-      <header className="topbar">
-        <div className="title">Claude GUI</div>
-        <div className="controls">
-          <button onClick={() => { document.documentElement.classList.toggle('dark'); }}>Toggle Theme</button>
-          <button onClick={async () => { const svc = await import('./services/claude'); const running = await svc.status(); setRunning(Boolean(running)); if (running) { svc.stopClaude(); appendMessage({ id: String(Date.now()), source: 'claude', text: '(claude stopped)' }); } else { svc.startClaude([], envBaseUrl ? { ANTHROPIC_BASE_URL: envBaseUrl } : undefined); appendMessage({ id: String(Date.now()), source: 'claude', text: '(claude started)' }); } }}>Start/Stop</button>
-        </div>
-      </header>
-
-      <nav className="tabs">
+    <div className="app-container">
+      <nav className="nav-tabs">
         <button className={tab === "conversation" ? "active" : ""} onClick={() => setTab("conversation")}>Conversation</button>
         <button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>History</button>
         <button className={tab === "settings" ? "active" : ""} onClick={() => setTab("settings")}>Settings</button>
