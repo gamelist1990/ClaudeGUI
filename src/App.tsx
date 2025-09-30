@@ -1,14 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import { UnlistenFn } from "@tauri-apps/api/event";
 import "./css/theme.css";
-import { Composer, MarkdownView, Message } from "./components";
+import { Composer, MarkdownView, Message, MessageType } from "./components";
 import Settings from './settings';
+import { ClaudeAPI } from "./api/claude";
 
-type Message = {
-  id: string;
-  source: "user" | "claude" | "stderr";
-  text: string;
-};
+type Message = MessageType;
 
 export default function App() {
   // old tab state removed in redesign
@@ -33,13 +30,11 @@ export default function App() {
     let unlistenErr: UnlistenFn | null = null;
 
     (async () => {
-      unlistenOut = await listen("claude-stdout", (e) => {
-        const payload = (e.payload as any) ?? "";
-        appendMessage({ id: String(Date.now()) + "-o", source: "claude", text: String(payload) });
+      unlistenOut = await ClaudeAPI.onStdout((payload) => {
+        appendMessage({ id: String(Date.now()) + "-o", source: "claude", text: payload });
       });
-      unlistenErr = await listen("claude-stderr", (e) => {
-        const payload = (e.payload as any) ?? "";
-        appendMessage({ id: String(Date.now()) + "-e", source: "stderr", text: String(payload) });
+      unlistenErr = await ClaudeAPI.onStderr((payload) => {
+        appendMessage({ id: String(Date.now()) + "-e", source: "stderr", text: payload });
       });
     })();
 
