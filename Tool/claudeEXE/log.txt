@@ -1,0 +1,3 @@
+[OUT] Hi. How can I help?
+[OUT] こんにちは！何を手伝いしましょうか？
+[OUT] こんにちは

@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "claude-server": "node Tool/claudeEXE/ws-server.js",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri",
+    
     "test": "vitest",
     "test:watch": "vitest --watch"
   },
@@ -15,12 +16,14 @@
     "@tauri-apps/api": "^2.8.0",
     "@tauri-apps/plugin-dialog": "~2",
     "@tauri-apps/plugin-opener": "^2",
+    "@types/ws": "^8.18.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-markdown": "^10.1.0",
     "rehype-raw": "^7.0.0",
     "rehype-sanitize": "^6.0.0"
   },
+  "ws": "^8.13.0",
   "devDependencies": {
     "@tauri-apps/cli": "^2",
     "@testing-library/jest-dom": "^6.0.0",

@@ -505,16 +505,12 @@ dependencies = [
 name = "claudegui"
 version = "0.1.0"
 dependencies = [
- "once_cell",
  "serde",
- "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
- "tracing",
  "tracing-subscriber",
- "winapi",
 ]
 
 [[package]]

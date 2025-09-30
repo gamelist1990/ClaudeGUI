@@ -121,15 +121,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                   onChange={(e) => setLocalExecutable(e.target.value)}
                   placeholder="/usr/local/bin/claude or C:\\path\\to\\claude.exe"
                 />
-                <p style={{
-                  margin: 'var(--space-2) 0 0',
-                  fontSize: 'var(--text-xs)',
-                  color: 'var(--color-text-muted)'
-                }}>
-                  空欄にするとシステムの PATH にある 'claude' コマンドを使います（グローバルにインストールされている場合は通常これで動作します）。
-                  アプリはワークスペース選択時にそのフォルダへ移動（cd）してから Claude を起動します。
-                  PATH にない環境や明示的に指定したい場合はフルパス（例: C:\\path\\to\\claude.exe）を入力してください。
-                </p>
+                
               </div>
             </div>
 

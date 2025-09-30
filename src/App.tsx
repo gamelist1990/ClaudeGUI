@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { UnlistenFn } from "@tauri-apps/api/event";
+
 import WorkspaceSelect from './components/layout/WorkspaceSelect';
 import "./styles/theme.css";
 import "./styles/components.css";
@@ -33,21 +33,20 @@ const AppContent: React.FC = () => {
 
   // Listen to claude stdout/stderr events and append messages
   useEffect(() => {
-    let unlistenOut: UnlistenFn | null = null;
-    let unlistenErr: UnlistenFn | null = null;
+    let unlistenOut: (() => void) | null = null;
+    let unlistenErr: (() => void) | null = null;
 
-    (async () => {
-      unlistenOut = await ClaudeAPI.onStdout((payload) => {
-        appendMessage({ id: String(Date.now()) + "-o", source: "claude", text: payload });
-      });
-      unlistenErr = await ClaudeAPI.onStderr((payload) => {
-        appendMessage({ id: String(Date.now()) + "-e", source: "stderr", text: payload });
-      });
-    })();
+    ClaudeAPI.onStdout((payload) => {
+      appendMessage({ id: String(Date.now()) + "-o", source: "claude", text: payload });
+    }).then((fn) => { unlistenOut = fn; }).catch(() => {});
+
+    ClaudeAPI.onStderr((payload) => {
+      appendMessage({ id: String(Date.now()) + "-e", source: "stderr", text: payload });
+    }).then((fn) => { unlistenErr = fn; }).catch(() => {});
 
     return () => {
-      if (unlistenOut) unlistenOut();
-      if (unlistenErr) unlistenErr();
+      try { if (unlistenOut) unlistenOut(); } catch (e) {}
+      try { if (unlistenErr) unlistenErr(); } catch (e) {}
     };
   }, []);
 
