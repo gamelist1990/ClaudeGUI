@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import { UnlistenFn } from "@tauri-apps/api/event";
 import "./css/theme.css";
-import { Composer, MarkdownView, Message } from "./components";
+import { Composer, MarkdownView, Message, MessageType } from "./components";
 import Settings from './settings';
+import { ClaudeAPI } from "./api/claude";
 
 type Message = MessageType;
 
