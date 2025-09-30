@@ -1,19 +1,28 @@
-import React, { useEffect, useRef, useState } from "react";
-import { UnlistenFn } from "@tauri-apps/api/event";
-import "./App.css";
+import { useEffect, useRef, useState } from "react";
+import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import "./css/theme.css";
 import { Composer, MarkdownView, Message } from "./components";
-import { ClaudeAPI, MessageType } from "./api";
+import Settings from './settings';
 
 type Message = MessageType;
 
-
 export default function App() {
-  const [tab, setTab] = useState<"conversation" | "history" | "settings">("conversation");
+  // old tab state removed in redesign
+  const [, setRunning] = useState(false); // Start/Stopボタンで使用
   const [messages, setMessages] = useState<Message[]>([]);
   const [envBaseUrl, setEnvBaseUrl] = useState<string>(
     localStorage.getItem("ANTHROPIC_BASE_URL") ?? ""
   );
   const messagesRef = useRef<HTMLDivElement | null>(null);
+
+  // Think mode state (思考モード)
+  const [thinkMode, setThinkMode] = useState(false);
+  // Mode cycling for session behavior. Alt+M to cycle.
+  const modes = ["normal", "bypass", "yolo"] as const;
+  type Mode = (typeof modes)[number];
+  const [mode, setMode] = useState<Mode>((localStorage.getItem("claude_mode") as Mode) ?? "normal");
+  const [settingsVisible, setSettingsVisible] = useState(false);
+
 
   useEffect(() => {
     let unlistenOut: UnlistenFn | null = null;
@@ -41,6 +50,24 @@ export default function App() {
     }
   }, [messages]);
 
+  // Listen for Tab key to toggle Think mode, and Alt+M to cycle modes
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Tab") {
+        e.preventDefault();
+        toggleThinkMode();
+      }
+      // Alt+M to cycle
+      if (e.key.toLowerCase() === "m" && e.altKey) {
+        e.preventDefault();
+        cycleMode();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [thinkMode, mode]);
+
   function appendMessage(m: Message) {
     setMessages((s) => [...s, m]);
   }
@@ -49,7 +76,54 @@ export default function App() {
     if (!text.trim()) return;
     appendMessage({ id: String(Date.now()), source: "user", text });
     try {
-      await ClaudeAPI.sendInput({ text });
+      const { sendInput } = await import("./services/claude");
+      // Prefix GUI-sent messages with '> ' so backend sees as user message
+      const out = text.startsWith('>') ? text : `> ${text}`;
+      await sendInput(out);
+    } catch (e: any) {
+      appendMessage({ id: String(Date.now()), source: "stderr", text: String(e) });
+    }
+  }
+
+  function cycleMode() {
+    const idx = modes.indexOf(mode);
+    const next = modes[(idx + 1) % modes.length];
+    setMode(next);
+    localStorage.setItem("claude_mode", next);
+    appendMessage({ id: String(Date.now()), source: "claude", text: `(mode => ${next})` });
+  }
+
+  // Toggle Think mode and notify backend (special control messages)
+  async function toggleThinkMode() {
+    const newVal = !thinkMode;
+    setThinkMode(newVal);
+    try {
+      const svc = await import("./services/claude");
+      // send a control message so backend can detect Think-mode toggle
+      await svc.sendInput(newVal ? "[[__THINK_ON__]]" : "[[__THINK_OFF__]]");
+      appendMessage({ id: String(Date.now()), source: "claude", text: `(think mode ${newVal ? "ON" : "OFF"})` });
+    } catch (e: any) {
+      appendMessage({ id: String(Date.now()), source: "stderr", text: String(e) });
+    }
+  }
+
+  async function startNewSession() {
+    try {
+      const svc = await import("./services/claude");
+      // If running, stop first to ensure a fresh session
+      const running = await svc.status();
+      if (running) {
+        await svc.stopClaude();
+        appendMessage({ id: String(Date.now()), source: "claude", text: "(claude stopped for new session)" });
+      }
+      // build args depending on mode
+      const args: string[] = [];
+      if (mode === 'yolo') args.push('--dangerously-skip-permissions');
+      // 'bypass' could be an alias to same flag or different; keep for future
+      if (mode === 'bypass' && !args.includes('--dangerously-skip-permissions')) args.push('--dangerously-skip-permissions');
+      await svc.startClaude(args, envBaseUrl ? { ANTHROPIC_BASE_URL: envBaseUrl } : undefined);
+      appendMessage({ id: String(Date.now()), source: "claude", text: "(new claude session started)" });
+      setRunning(true);
     } catch (e: any) {
       appendMessage({ id: String(Date.now()), source: "stderr", text: String(e) });
     }
@@ -74,21 +148,7 @@ export default function App() {
     URL.revokeObjectURL(url);
   }
 
-  function importConversations(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const json = JSON.parse(String(reader.result ?? "[]"));
-        localStorage.setItem("conversations", JSON.stringify(json));
-        alert("Imported conversations");
-      } catch (err) {
-        alert("Invalid file");
-      }
-    };
-    reader.readAsText(file);
-  }
+  // importConversations removed; import via History tab is not part of the new layout
 
   function loadConversations() {
     const convs = JSON.parse(localStorage.getItem("conversations" ) ?? "[]");
@@ -101,64 +161,80 @@ export default function App() {
   }
 
   return (
-    <div className="app-container">
-      <nav className="nav-tabs">
-        <button className={tab === "conversation" ? "active" : ""} onClick={() => setTab("conversation")}>Conversation</button>
-        <button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>History</button>
-        <button className={tab === "settings" ? "active" : ""} onClick={() => setTab("settings")}>Settings</button>
-      </nav>
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+          <div style={{fontWeight:700}}>Conversations</div>
+          <div className="mode-chip">{mode.toUpperCase()}</div>
+        </div>
+        <div className="hint">New: Alt+M to cycle modes · Tab toggles Think</div>
+        <div style={{height:12}} />
+        {/* simple history preview */}
+        {loadConversations().map((c: any) => (
+          <div key={c.id} style={{padding:8,borderRadius:8,marginBottom:8,background:'rgba(255,255,255,0.02)'}}>
+            <div style={{fontSize:12,fontWeight:700}}>Conversation {c.id}</div>
+            <div style={{fontSize:12,color:'#9aa6b2'}}>{c.messages.length} messages</div>
+          </div>
+        ))}
+      </aside>
 
-      <main className="main-area">
-        {tab === "conversation" && (
-          <section className="conversation">
-            <div className="message-list" ref={messagesRef}>
-              {messages.map((m) => (
-                <div key={m.id} className={`message ${m.source}`}>
-                  <div className="meta">{m.source}</div>
-                  <div className="text"><MarkdownView source={m.text} /></div>
-                </div>
-              ))}
-            </div>
+      <header className="header">
+        <div className="header-left">
+          <div className="brand">Claude GUI</div>
+          <div style={{marginLeft:8,color:'#9aa6b2'}}>軽量なGUIクライアント</div>
+        </div>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          <button className="btn btn--gray" onClick={() => { document.documentElement.classList.toggle('dark'); }}>Theme</button>
+          <button className="btn btn--gray" onClick={toggleThinkMode}>{thinkMode ? '🤔 Think: ON' : '💡 Think: OFF'}</button>
+          <button className="btn btn--white" onClick={startNewSession}>🔁 New Session</button>
+          <button className="btn btn--gray" onClick={() => setSettingsVisible(true)}>⚙️</button>
+        </div>
+      </header>
 
-            <Composer onSend={handleSend} />
-            <div style={{display:'flex', gap:8}}>
-              <button onClick={saveConversation}>Save</button>
-              <button onClick={exportConversations}>Export</button>
-            </div>
-          </section>
-        )}
+      <main className="main">
+        {mode === 'yolo' && <div className="warning">Yolo Mode enabled: --dangerously-skip-permissions will be passed when starting Claude.</div>}
+        <div className="conversation-area">
+          <div className="messages" ref={messagesRef}>
+            {messages.map((m) => (
+              <div key={m.id} className={`message-card ${m.source}`}>
+                <div className="message-meta">{m.source} <span style={{marginLeft:8,color:'#8e9aa3',fontSize:12}}>{new Date(Number(m.id.split('-')[0]||Date.now())).toLocaleTimeString()}</span></div>
+                <div className="message-text"><MarkdownView source={m.text} /></div>
+              </div>
+            ))}
+          </div>
 
-        {tab === "history" && (
-          <section className="history">
-            <div className="history-controls">
-              <button onClick={exportConversations}>Export</button>
-              <input type="file" accept="application/json" onChange={importConversations} />
+          <div className="composer-row">
+            <Composer onSend={handleSend} mode={mode} thinkMode={thinkMode} />
+            <div className="composer-controls">
+              <button className="btn btn--white" onClick={saveConversation}>💾 Save</button>
+              <button className="btn btn--gray" onClick={exportConversations}>⤓ Export</button>
             </div>
-            <div className="history-list">
-              {loadConversations().map((c: any) => (
-                <div key={c.id} className="history-item">
-                  <div>Conversation {c.id}</div>
-                  <div className="history-preview">
-                    {c.messages.slice(-5).map((m: any, idx: number) => (
-                      <div key={idx} className={`preview ${m.source}`}><MarkdownView source={m.text} /></div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-
-        {tab === "settings" && (
-          <section className="settings">
-            <label>ANTHROPIC_BASE_URL</label>
-            <input value={envBaseUrl} onChange={(e) => setEnvBaseUrl(e.currentTarget.value)} placeholder="http://localhost:4000/anthropic/claude" />
-            <div className="settings-actions">
-              <button onClick={applySettings}>Save</button>
-            </div>
-          </section>
-        )}
+          </div>
+        </div>
       </main>
+
+      <aside className="right-pane">
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+          <div style={{fontWeight:700}}>Session</div>
+          <div className="mode-chip">{mode.toUpperCase()}</div>
+        </div>
+        <div style={{marginBottom:12}}>
+          <div style={{fontSize:13,color:'#9aa6b2'}}>Anthropic Base URL</div>
+          <input value={envBaseUrl} onChange={(e) => setEnvBaseUrl(e.currentTarget.value)} style={{width:'100%',marginTop:8,padding:8,borderRadius:8,background:'transparent',border:'1px solid rgba(255,255,255,0.03)'}} />
+        </div>
+        <div style={{display:'flex',gap:8}}>
+          <button onClick={applySettings}>Save</button>
+          <button onClick={async () => { const svc = await import('./services/claude'); const running = await svc.status(); setRunning(Boolean(running)); if (running) { svc.stopClaude(); appendMessage({ id: String(Date.now()), source: 'claude', text: '(claude stopped)' }); } else { svc.startClaude([], envBaseUrl ? { ANTHROPIC_BASE_URL: envBaseUrl } : undefined); appendMessage({ id: String(Date.now()), source: 'claude', text: '(claude started)' }); } }}>Start/Stop</button>
+        </div>
+      </aside>
+      <Settings
+        visible={settingsVisible}
+        onClose={() => setSettingsVisible(false)}
+        baseUrl={envBaseUrl}
+        onSave={(u) => { setEnvBaseUrl(u); localStorage.setItem('ANTHROPIC_BASE_URL', u); }}
+        yoloEnabled={mode === 'yolo'}
+        onToggleYolo={(v) => { if (v) setMode('yolo'); else setMode('normal'); localStorage.setItem('claude_mode', v ? 'yolo' : 'normal'); }}
+      />
     </div>
   );
 }

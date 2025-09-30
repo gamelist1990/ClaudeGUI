@@ -7,10 +7,13 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use once_cell::sync::Lazy;
-use tauri::{Manager, AppHandle};
 
 // Simple global storage for the spawned claude process.
 static CLAUDE_CHILD: Lazy<Mutex<Option<Arc<Mutex<Child>>>>> = Lazy::new(|| Mutex::new(None));
+
+// Output buffers
+static CLAUDE_STDOUT: Lazy<Mutex<Vec<String>>> = Lazy::new(|| Mutex::new(Vec::new()));
+static CLAUDE_STDERR: Lazy<Mutex<Vec<String>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -18,7 +21,7 @@ fn greet(name: &str) -> String {
 }
 
 #[tauri::command]
-fn start_claude(app: AppHandle, args: Option<Vec<String>>, envs: Option<HashMap<String, String>>) -> Result<String, String> {
+fn start_claude(args: Option<Vec<String>>, envs: Option<HashMap<String, String>>) -> Result<String, String> {
     let mut guard = CLAUDE_CHILD.lock().map_err(|e| e.to_string())?;
     if guard.is_some() {
         return Err("claude already running".into());
@@ -29,10 +32,8 @@ fn start_claude(app: AppHandle, args: Option<Vec<String>>, envs: Option<HashMap<
     if !args_vec.is_empty() {
         cmd.args(&args_vec);
     }
-    // Ensure we include --dangerously-skip-permissions by default if the user didn't provide it
-    if !args_vec.iter().any(|a| a == "--dangerously-skip-permissions") {
-        cmd.arg("--dangerously-skip-permissions");
-    }
+    // Note: do NOT forcefully add --dangerously-skip-permissions here.
+    // The frontend can opt-in by passing that arg when starting a session.
 
     cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
 
@@ -44,7 +45,7 @@ fn start_claude(app: AppHandle, args: Option<Vec<String>>, envs: Option<HashMap<
 
     let mut child = cmd.spawn().map_err(|e| format!("failed to spawn claude: {}", e))?;
 
-    // Take stdout/stderr so we can spawn threads to stream them to the frontend via events.
+    // Take stdout/stderr and spawn threads to capture lines into buffers.
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
@@ -52,13 +53,12 @@ fn start_claude(app: AppHandle, args: Option<Vec<String>>, envs: Option<HashMap<
     *guard = Some(child_arc.clone());
 
     if let Some(out) = stdout {
-        let app_handle = app.clone();
         thread::spawn(move || {
             let reader = BufReader::new(out);
             for line in reader.lines() {
                 match line {
                     Ok(l) => {
-                        let _ = app_handle.emit_all("claude-stdout", l);
+                        let _ = CLAUDE_STDOUT.lock().map(|mut v| v.push(l));
                     }
                     Err(_) => break,
                 }
@@ -67,13 +67,12 @@ fn start_claude(app: AppHandle, args: Option<Vec<String>>, envs: Option<HashMap<
     }
 
     if let Some(err) = stderr {
-        let app_handle = app.clone();
         thread::spawn(move || {
             let reader = BufReader::new(err);
             for line in reader.lines() {
                 match line {
                     Ok(l) => {
-                        let _ = app_handle.emit_all("claude-stderr", l);
+                        let _ = CLAUDE_STDERR.lock().map(|mut v| v.push(l));
                     }
                     Err(_) => break,
                 }
@@ -88,6 +87,19 @@ fn start_claude(app: AppHandle, args: Option<Vec<String>>, envs: Option<HashMap<
         .id();
 
     Ok(format!("started pid {}", pid))
+}
+
+#[tauri::command]
+fn get_claude_output() -> (Vec<String>, Vec<String>) {
+    let out = CLAUDE_STDOUT.lock().map(|v| v.clone()).unwrap_or_default();
+    let err = CLAUDE_STDERR.lock().map(|v| v.clone()).unwrap_or_default();
+    (out, err)
+}
+
+#[tauri::command]
+fn clear_claude_output() {
+    let _ = CLAUDE_STDOUT.lock().map(|mut v| v.clear());
+    let _ = CLAUDE_STDERR.lock().map(|mut v| v.clear());
 }
 
 #[tauri::command]
@@ -126,10 +138,6 @@ fn stop_claude() -> Result<String, String> {
                 Err(e) => return Err(format!("lock poisoned: {}", e)),
             },
             Err(_) => {
-                // If other refs exist, try to lock and kill
-                // (best-effort)
-                // Attempt to lock and kill
-                // Note: this may fail if other code holds the lock
                 return Err("failed to take ownership of process handle".into());
             }
         }
@@ -146,7 +154,15 @@ fn status() -> bool {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet, start_claude, send_input, stop_claude, status])
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            start_claude,
+            get_claude_output,
+            clear_claude_output,
+            send_input,
+            stop_claude,
+            status
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
